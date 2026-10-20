@@ -4,7 +4,7 @@ on:
   schedule:
     # Каждые 15 минут: собрать новости и прочитать сообщения боту.
     # В канал бот пишет раз в час (POST_EVERY_MINUTES в bot.py)
-    - cron: "7,22,37,52 * * * *"
+    - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
     inputs:
       check:
