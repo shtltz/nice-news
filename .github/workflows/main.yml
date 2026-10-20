@@ -1,0 +1,92 @@
+name: Новости в канал
+
+on:
+  schedule:
+    # Каждые 15 минут: собрать новости и прочитать сообщения боту.
+    # В канал бот пишет раз в час (POST_EVERY_MINUTES в bot.py)
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      check:
+        description: "Только проверить источники, ничего не отправлять"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: news
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Сертификаты Минцифры для российских сайтов
+        run: |
+          mkdir -p certs
+          curl -sSfL https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt -o certs/root.crt || echo "Не скачался корневой сертификат"
+          curl -sSfL https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt -o certs/sub.crt || echo "Не скачался промежуточный сертификат"
+
+      - name: Проверить источники
+        if: ${{ inputs.check }}
+        run: python bot.py --check
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+
+      - name: Достать память бота
+        if: ${{ !inputs.check }}
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Собрать и отправить новости
+        if: ${{ !inputs.check }}
+        run: python bot.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+
+      - name: Сохранить память бота
+        if: ${{ !inputs.check && always() && hashFiles('state/seen.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Сохранить источники и слова, присланные боту
+        if: ${{ !inputs.check && always() }}
+        run: |
+          if [ -n "$(git status --porcelain sources.txt keywords.txt)" ]; then
+            git config user.name "news-bot"
+            git config user.email "news-bot@users.noreply.github.com"
+            git add sources.txt keywords.txt
+            git commit -m "Изменения из Telegram"
+            git pull --rebase
+            git push
+          fi
+
+      - name: Не дать GitHub отключить расписание
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt $(( 50 * 86400 )) ]; then
+            git config user.name "news-bot"
+            git config user.email "news-bot@users.noreply.github.com"
+            git commit --allow-empty -m "Расписание активно"
+            git push
+          fi
