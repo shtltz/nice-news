@@ -1,0 +1,112 @@
+# Источники новостей. Один источник на строку.
+# Строки с # в начале — комментарии, бот их не читает.
+#
+# Что можно писать:
+#   - адрес RSS-ленты
+#   - адрес сайта или раздела: бот сам найдёт RSS, а если его нет,
+#     будет брать новые ссылки на статьи прямо со страницы
+#   - открытый Telegram-канал: https://t.me/имя или @имя
+#   - открытое сообщество ВКонтакте: https://vk.com/имя (нужен VK_TOKEN, см. README)
+#
+# 📷 в начале строки: брать из источника только новости о фотоконкурсах
+# (список конкурсов — в contests.txt). Для фотоизданий, где остальное не по теме.
+#
+# Плюс в начале строки: брать ВСЕ новости источника, без фильтра по словам.
+# Ставьте его тематическим разделам, где всё по теме. Слова-исключения
+# (с минусом в keywords.txt) работают и для таких источников.
+
+# --- Российские СМИ ---
++ https://rg.ru/tema/obshestvo/ekologija
++ https://ecosphere.press/feed/
+https://dobro.press/
++ https://www.vedomosti.ru/esg
++ https://trends.rbc.ru/trends/green
+https://science.mail.ru/
+https://www.techinsider.ru/science/
+https://naked-science.ru/?yandex_feed=news
+https://nplus1.ru/rss
+https://new-science.ru/category/biologiya/feed/
+https://sciencexxi.com/nauka/feed/
+https://naukatv.ru/
+https://sher.media/feed/
++ https://nia.eco/feed/
+
+# --- Благотворительность и НКО ---
+https://asi.org.ru/news/
+https://www.miloserdie.ru/news/
+
+# --- Наука и природа ---
+https://www.vokrugsveta.ru/news/
+
+# --- Общие новости: только через фильтр по словам, без плюса ---
+https://tass.ru/rss/v2.xml
+https://ria.ru/export/rss2/archive/index.xml
+https://www.interfax.ru/rss.asp
+https://www.kommersant.ru/RSS/news.xml
+https://lenta.ru/rss/news
+https://rssexport.rbc.ru/rbcnews/news/30/full.rss
+https://www.vedomosti.ru/rss/news
+https://rg.ru/xml/index.xml
+https://iz.ru/xml/rss/all.xml
+https://news.mail.ru/rss/
+https://russiatoday.ru/rss
+https://aif.ru/rss/all.php
+https://www.kp.ru/rss/allsections.xml
+https://www.mk.ru/rss/index.xml
+https://www.m24.ru/rss.xml
+https://regnum.ru/rss
+
+# --- Ведомства и организации ---
+https://www.mos.ru/rss
+https://rgo.ru/
+https://wciom.ru/
+https://www.sberbank.ru/ru/sberpress
+
+# --- Зарубежные СМИ ---
+https://www.nationalgeographic.com/
+https://www.nationalgeographic.com/animals
++ https://www.theguardian.com/environment/climate-crisis/rss
++ https://earth.org/feed/
+https://www.earth.com/feed/
+https://phys.org/rss-feed/
+https://scitechdaily.com/feed/
+https://www.nature.com/nature.rss
+https://www.science.org/rss/news_current.xml
++ https://www.sciencedaily.com/rss/earth_climate/ecology.xml
++ https://www.sciencenews.org/topic/ecosystems/feed
++ https://www.newscientist.com/subject/environment/feed/
+https://www.independent.co.uk/topic/ecology
+
+# --- Фотоконкурсы ---
+# Издания, которые пишут об итогах конкурсов. Берём только конкурсы
+📷 https://www.thisiscolossal.com/feed/
+📷 https://mymodernmet.com/feed/
+📷 https://121clicks.com/feed
+📷 https://www.boredpanda.com/feed/
+# Сайты самих конкурсов
+📷 https://www.birdpoty.com/news
+📷 https://www.bwpawards.org/news
+📷 https://www.worldnaturephotographyawards.com/blog
+# Музей естествознания (Wildlife Photographer of the Year) и Oceanographic
+# (Ocean Photographer of the Year): у них много новостей о природе, поэтому через фильтр
+https://www.nhm.ac.uk/discover/news.html
+https://oceanographicmagazine.com/
+
+# --- ВКонтакте ---
++ https://vk.com/sobirator
++ https://vk.com/ecosborka
+
+# --- Telegram ---
++ https://t.me/radionovasg
+https://t.me/rbc_trends
++ https://t.me/mospriroda
++ https://t.me/moscowzoo_official
++ https://t.me/ecomisli
++ https://t.me/recyclemagru
++ https://t.me/ecodays
++ https://t.me/sortirovochnaya
++ https://t.me/sobirator_ru
++ https://t.me/rsbor_ru
++ https://t.me/greenfond
+https://t.me/etosher
+https://t.me/rasofficial

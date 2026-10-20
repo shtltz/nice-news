@@ -1,0 +1,70 @@
+# Фотоконкурсы о природе и животных.
+# Новость, которая совпала с любой строкой отсюда, проходит из любого источника
+# (даже без слов из keywords.txt) и приходит в канал со значком 📷.
+# Правила написания те же, что в keywords.txt. Исключения (с минусом)
+# берутся из keywords.txt.
+
+# ===== Конкурсы, о которых уже писали =====
+wildlife photographer of the year
+bird photographer of the year
+"bpoty"
+ocean photographer of the year
+underwater photographer of the year
+"UPY"
+comedy wildlife
+sony world photography
+world photography awards
+world press photo
+world nature photography
+nature photography contest
+milky way photographer
+northern lights photographer
+capture the atlas
+siena international photo
+siena drone photo
+"SIPA"
+academy photo awards
+british wildlife photography
+nature photographer of the year
+australian geographic nature
+
+# ===== Другие крупные конкурсы о природе =====
+close-up photographer of the year
+"CUPOTY"
+nature ttl
+astronomy photographer of the year
+audubon photography awards
+mangrove photography awards
+drone photo awards
+GDT nature photographer
+european wildlife photographer
+big picture natural world
+travel photographer of the year
+royal society photography
+
+# ===== Российские конкурсы =====
+золот черепах
+самая красивая страна
+самой красивой страны
+дикая природа россии
+дикой природы россии
+первозданн росси
+фотограф млечн пут
+
+# ===== Общие фразы =====
+фотоконкурс
+конкурс фотограф
+конкурс фото
+конкурс снимк
+конкурс подводн фото
+конкурс дик природ
+фотограф года
+photographer of the year
+photo awards
+photography awards
+photo contest
+photography contest
+photo competition
+photography competition
+re:(фото|снимк|кадр)\w*[^.!?]{0,40}(дик\w* природ|природ|животн|птиц|сияни|подводн|млечн)
+re:(wildlife|nature|bird|ocean|underwater|astronomy|landscape)\s+photo\w*\s+(award|contest|competition|prize|winner|finalist)
