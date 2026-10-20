@@ -60,7 +60,6 @@ https://regnum.ru/rss
 https://www.mos.ru/rss
 https://rgo.ru/
 https://wciom.ru/
-https://www.sberbank.ru/ru/sberpress
 
 # --- Зарубежные СМИ ---
 https://www.nationalgeographic.com/
