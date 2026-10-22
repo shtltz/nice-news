@@ -109,3 +109,6 @@ https://t.me/rbc_trends
 + https://t.me/greenfond
 https://t.me/etosher
 https://t.me/rasofficial
+
+# --- Добавлено через бота ---
+@weather_from_chief
