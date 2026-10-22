@@ -118,12 +118,26 @@ def load_keywords(path=KEYWORDS_FILE):
 
 
 def passes(text, include, exclude, take_all):
+    """Источник с плюсом берётся целиком — исключения к нему не применяются.
+    Остальные: нет слов-исключений и есть хотя бы одно слово из списка."""
+    if take_all:
+        return True
     t = norm(text)
     if any(p.search(t) for p in exclude):
         return False
-    if take_all or not include:
+    if not include:
         return True
     return any(p.search(t) for p in include)
+
+
+def match_text(it, mode):
+    """По какому тексту проверять слова. Для RSS и страниц — только заголовок:
+    некоторые ленты (например, РБК) кладут в анонс всю статью целиком,
+    и в длинном тексте всегда найдётся случайное слово.
+    Для Telegram заголовка нет — берём начало поста."""
+    if str(mode).startswith("Telegram") or mode == "ВКонтакте":
+        return it["text"][:300]
+    return it["title"]
 
 
 def is_contest(text, contests, exclude):
@@ -608,8 +622,49 @@ def describe_check(target, rule):
     return True, f"способ: {mode}, записей сейчас: {len(items)}, {note}\n{sample}"
 
 
+FEED_GUESSES = ["/feed/", "/rss/", "/rss", "/feed", "/rss.xml", "/feed.xml",
+                "/rss-feed/", "/index.xml", "/atom.xml", "/rss/all.xml", "/news/rss/"]
+
+
+def guess_feed(url):
+    """Главная страница не открылась или пустая — ищем RSS по типовым адресам.
+    Многие сайты закрывают страницы от ботов, но оставляют открытой ленту."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        return None
+    root = f"{parts.scheme}://{parts.netloc}"
+    candidates = []
+    path = parts.path.rstrip("/")
+    if path:
+        candidates += [root + path + "/feed/", root + path + "/rss/"]
+    candidates += [root + g for g in FEED_GUESSES]
+    for cand in candidates:
+        try:
+            feed = feedparser.parse(fetch(cand).content)
+        except Exception:
+            continue
+        if feed.entries:
+            return cand
+    return None
+
+
+def same_site(target, lines):
+    """Источники из списка с того же сайта (кроме Telegram и ВК)."""
+    if tg_channel_name(target) or vk_group_name(target) or not target.startswith("http"):
+        return []
+    dom = base_domain(urlsplit(target).netloc)
+    found = []
+    for l in lines:
+        t = parse_source(l)[0]
+        if t.startswith("http") and not tg_channel_name(t) and not vk_group_name(t) \
+                and base_domain(urlsplit(t).netloc) == dom:
+            found.append(t)
+    return found
+
+
 def cmd_add(lines_in):
-    existing = {source_key(parse_source(l)[0]) for l in read_lines(SOURCES_FILE)}
+    current = read_lines(SOURCES_FILE)
+    existing = {source_key(parse_source(l)[0]) for l in current}
     answers = []
     for raw in lines_in:
         raw = raw.strip()
@@ -622,14 +677,35 @@ def cmd_add(lines_in):
         if source_key(target) in existing:
             answers.append(f"Уже есть в списке: {target}")
             continue
+        siblings = same_site(target, current)
         ok, info = describe_check(target, rule)
+        note = ""
         if not ok:
+            feed_url = guess_feed(target)
+            if feed_url and source_key(feed_url) in existing:
+                answers.append(f"Этот сайт уже есть в списке через RSS-ленту: {feed_url}\n"
+                               "Она работает, добавлять ничего не нужно.")
+                continue
+            if feed_url:
+                ok, info = describe_check(feed_url, rule)
+                if ok:
+                    note = f"Страница {target} закрыта для бота, но нашлась RSS-лента. Добавил её.\n"
+                    target = feed_url
+        if not ok:
+            if siblings:
+                info += "\nС этого сайта в списке уже есть: " + ", ".join(siblings)
             answers.append(f"❌ Не добавил {target}\n{info}")
+            continue
+        if source_key(target) in existing:
+            answers.append(f"Уже есть в списке: {target}")
             continue
         prefix = {"all": "+ ", "photo": "📷 ", "filter": ""}[rule]
         append_line(SOURCES_FILE, prefix + target)
         existing.add(source_key(target))
-        answers.append(f"✅ Добавил {target}\n{info}")
+        current.append(prefix + target)
+        if siblings:
+            note += "С этого сайта в списке уже есть: " + ", ".join(siblings) + "\n"
+        answers.append(f"✅ Добавил {target}\n{note}{info}")
     return "\n\n".join(answers)
 
 
@@ -821,7 +897,7 @@ def main():
             if rule == "photo":
                 if not contest:
                     continue
-            elif not contest and not passes(it["text"], include, exclude, take_all):
+            elif not contest and not passes(match_text(it, mode), include, exclude, take_all):
                 continue
             sig = title_signature(it["title"])
             if MERGE_SIMILAR and any(is_similar(sig, t[1]) for t in state["titles"]):
@@ -836,7 +912,7 @@ def main():
     print(f"Новых подходящих: {found}, склеено похожих: {merged}, "
           f"ждут отправки: {len(state['pending'])}")
 
-    due = now - state["last_post"] >= (POST_EVERY_MINUTES - 5) * 60
+    due = now - state["last_post"] >= (POST_EVERY_MINUTES - 10) * 60
     if dry:
         for m in build_messages(sorted(state["pending"], key=lambda it: it["time"])):
             print("-" * 40 + "\n" + m)
