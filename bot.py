@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+import uuid
 import warnings
 from calendar import timegm
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +40,9 @@ ONE_MESSAGE_PER_NEWS = False
 # Как часто отправлять подборку в канал, минут. Собирает бот чаще —
 # как часто, задаётся расписанием в .github/workflows/main.yml
 POST_EVERY_MINUTES = 60
+# Ежедневная сводка: во сколько (по Москве) и сколько тем
+DIGEST_HOUR = 10
+DIGEST_TOPICS = 5
 # Склеивать похожие заголовки из разных изданий (одно событие — одна ссылка)
 MERGE_SIMILAR = True
 # Сколько ссылок помнить, чтобы не присылать повторы
@@ -49,6 +53,7 @@ BASE = Path(__file__).parent
 SOURCES_FILE = BASE / "sources.txt"
 KEYWORDS_FILE = BASE / "keywords.txt"
 CONTESTS_FILE = BASE / "contests.txt"
+PUBLISHED_FILE = BASE / "published.txt"
 CONTEST_MARK = "📷 "
 STATE_FILE = BASE / "state" / "seen.json"
 
@@ -178,7 +183,9 @@ def load_state():
             "sources": set(data.get("sources", [])),
             "pending": data.get("pending", []),
             "titles": data.get("titles", []),
-            "last_post": data.get("last_post", 0)}
+            "last_post": data.get("last_post", 0),
+            "history": data.get("history", []),
+            "last_digest": data.get("last_digest", "")}
 
 
 def save_state(state):
@@ -190,6 +197,8 @@ def save_state(state):
         "pending": state["pending"],
         "titles": [t for t in state["titles"] if t[0] > cutoff][-5000:],
         "last_post": state["last_post"],
+        "history": [h for h in state["history"] if h[0] > time.time() - 36 * 3600],
+        "last_digest": state["last_digest"],
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
@@ -491,6 +500,296 @@ def read_source(target):
     return items_from_url(target)
 
 
+# ---------- Ежедневная сводка ----------
+
+# Слишком общие слова: по ним тему не назовёшь («природа», «учёные», «помогли»)
+TOPIC_STOP_WORDS = """природа животные экология учёные ученые помогли помогают благотворительный
+волонтёры климат планета место места опасный делать жизнь большой город изменение
+открыли человек помощь поддержка людям людей происходит другие вместе посмотрите может
+правда живет живут детей необычный необычные сбер россиян россияне жителей жители область
+области регион регионе районе район край края страны страна мира мировой эксперт эксперты
+специалисты впервые сегодня неделю сутки могут стала станет назван назвали раскрыли
+рассказали объяснили предупредили нашли обнаружили появились получили будут тысяч
+миллионов процентов число более около году года новый новые новых российские российских
+крае краю краем области областях республике округе городе столице подмосковье
+scientists study research researchers new year years could would after first world says
+reveal reveals about with from this that what have into their more than over most found
+show shows image images photo photos best """.split()
+TOPIC_STOP = STOP_STEMS | {_stem(norm(w)) for w in TOPIC_STOP_WORDS if len(w) >= 4}
+
+
+def source_id(target):
+    ch = tg_channel_name(target)
+    if ch:
+        return "t.me/" + ch.lower()
+    grp = vk_group_name(target)
+    if grp:
+        return "vk.com/" + grp.lower()
+    return base_domain(urlsplit(target).netloc)
+
+
+def topic_stems(title):
+    return {st for st in title_signature(title) if st not in TOPIC_STOP}
+
+
+def build_digest(history, now, published_titles=()):
+    """Группирует новости за сутки по общим словам и выбирает темы,
+    о которых написало больше всего разных изданий."""
+    day = [h for h in history if now - h[0] <= 24 * 3600]
+    docs, seen_links = [], set()
+    for t, title, link, src in day:
+        k = clean_link(link)
+        if k in seen_links:
+            continue
+        seen_links.add(k)
+        docs.append({"title": title, "link": link, "src": src, "stems": topic_stems(title)})
+    if not docs:
+        return None
+    all_sources = {d["src"] for d in docs}
+
+    index = {}
+    for i, d in enumerate(docs):
+        for st in d["stems"]:
+            index.setdefault(st, []).append(i)
+
+    used, topics = set(), []
+    while len(topics) < DIGEST_TOPICS:
+        best, best_score = None, (1, 0)
+        for st, idxs in index.items():
+            free = [i for i in idxs if i not in used]
+            score = (len({docs[i]["src"] for i in free}), len(free))
+            if score > best_score:
+                best, best_score = st, score
+        if best is None or best_score[0] < 2:
+            break  # тема — это когда пишут хотя бы два разных издания
+        cluster = [i for i in index[best] if i not in used]
+        used.update(cluster)
+        # Ключевые слова темы: якорь плюс то, что встречается хотя бы в 40% заголовков
+        counts = {}
+        for i in cluster:
+            for st in docs[i]["stems"]:
+                counts[st] = counts.get(st, 0) + 1
+        keys = {st for st, c in counts.items() if c >= max(2, 0.4 * len(cluster))} | {best}
+        # Главный заголовок — тот, где больше всего ключевых слов темы
+        ranked = sorted(cluster, key=lambda i: -len(docs[i]["stems"] & keys))
+        shown, shown_src = [], set()
+        for i in ranked:
+            d = docs[i]
+            sig = title_signature(d["title"])
+            if any(is_similar(sig, title_signature(docs[j]["title"])) for j in shown):
+                continue
+            if d["src"] in shown_src and len(shown) < 2:
+                continue
+            shown.append(i)
+            shown_src.add(d["src"])
+            if len(shown) == 3:
+                break
+        # Писали ли мы уже о похожем: в нашем заголовке должно быть главное слово темы.
+        # Из подходящих берём самый близкий, при равенстве — более свежий (ниже в списке)
+        ours, best_overlap = None, 0
+        for pt in published_titles:
+            st = topic_stems(pt)
+            if best not in st:
+                continue
+            ov = len(st & keys)
+            if ov >= best_overlap:
+                ours, best_overlap = pt, ov
+        others = sorted({docs[i]["src"] for i in cluster} - {docs[i]["src"] for i in shown})
+        topics.append({"n": len(cluster), "sources": best_score[0],
+                       "shown": [docs[i] for i in shown], "ours": ours, "others": others,
+                       "all": [docs[i] for i in ranked[:15]]})
+
+    return {"total": len(docs), "sources": len(all_sources), "topics": topics}
+
+
+MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+          "августа", "сентября", "октября", "ноября", "декабря"]
+
+
+def plural(n, one, few, many):
+    n10, n100 = n % 10, n % 100
+    if n10 == 1 and n100 != 11:
+        return f"{n} {one}"
+    if 2 <= n10 <= 4 and not 12 <= n100 <= 14:
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+def heat(sources):
+    return "🔥🔥🔥" if sources >= 6 else "🔥🔥" if sources >= 4 else "🔥"
+
+
+def format_digest(dg, day):
+    head = f"📊 Сводка за сутки, {day.day} {MONTHS[day.month - 1]}\n"
+    if not dg or not dg["topics"]:
+        n = dg["total"] if dg else 0
+        return head + f"\nНовостей по нашим темам: {n}. Тем, о которых писали бы сразу несколько изданий, не было."
+    lines = [head + f"По нашим темам {plural(dg['total'], 'новость', 'новости', 'новостей')} "
+             f"из {plural(dg['sources'], 'источника', 'источников', 'источников')}. Чаще всего писали:"]
+    for num, t in enumerate(dg["topics"], 1):
+        main = t["shown"][0]
+        block = [f"\n{num}. {main['title']} — {main['link']}",
+                 f"{heat(t['sources'])} {plural(t['sources'], 'издание', 'издания', 'изданий')}, "
+                 f"{plural(t['n'], 'новость', 'новости', 'новостей')}"]
+        for d in t["shown"][1:]:
+            block.append(f"· {d['title']} — {d['link']}")
+        if t["others"]:
+            block.append("Ещё писали: " + ", ".join(t["others"][:6]) +
+                         (" и другие" if len(t["others"]) > 6 else ""))
+        block.append(f"У нас уже было: «{t['ours']}»" if t["ours"]
+                     else "Похожих материалов у нас не было")
+        lines.append("\n".join(block))
+    lines.append("\n🔥 — сколько разных изданий написали о теме: чем больше, тем громче тема.")
+    return "\n".join(lines)
+
+
+def moscow_now():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Moscow"))
+    except Exception:
+        from datetime import timedelta, timezone
+        return datetime.now(timezone(timedelta(hours=3)))
+
+
+# ---------- Нейросеть GigaChat для пересказа тем ----------
+# Включается, если в секретах GitHub есть GIGACHAT_KEY (ключ авторизации из
+# личного кабинета developers.sber.ru). Без ключа сводка собирается по словам.
+
+GIGACHAT_MODEL = "GigaChat-2-Pro"
+GIGACHAT_AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+GIGACHAT_CHAT_URLS = ["https://api.giga.chat/v1/chat/completions",
+                      "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"]
+
+GIGA_SYSTEM = """Ты редактор научно-популярного издания. Наши темы: экология, климат,
+природа и заповедники, животные, отходы и переработка, осознанное потребление,
+благотворительность и волонтёрство, фотоконкурсы о природе, небесные явления.
+Пиши по-русски, коротко и просто. Без канцелярита, без вводных слов,
+без кавычек вокруг обычных слов, без markdown."""
+
+GIGA_TASK = """Ниже заголовки новостей за сутки на одну тему{ours}.
+
+{titles}
+
+Ответь ровно тремя строками:
+Тема: название темы в 2–4 слова, в именительном падеже (например: Пчёлы умеют считать)
+Суть: Про кого или про что писали — и через запятую 2–4 главных поворота сюжета. Одно предложение. Пример: Про пчёл — как они научились считать до пяти, опыты в Австралии, что это говорит об их мозге.
+Для нас: оценка одним словом (интересно / средне / вряд ли) и через тире одно короткое предложение, почему и что из этого можно сделать."""
+
+
+def http_post(url, **kw):
+    try:
+        return requests.post(url, timeout=40, **kw)
+    except requests.exceptions.SSLError:
+        bundle = russian_ca_bundle()
+        if not bundle:
+            raise
+        return requests.post(url, timeout=40, verify=bundle, **kw)
+
+
+def gigachat_token(key):
+    r = http_post(GIGACHAT_AUTH_URL,
+                  headers={"Authorization": f"Basic {key}", "RqUID": str(uuid.uuid4()),
+                           "Content-Type": "application/x-www-form-urlencoded",
+                           "Accept": "application/json"},
+                  data={"scope": "GIGACHAT_API_PERS"})
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def gigachat_ask(token, prompt):
+    last = None
+    for url in GIGACHAT_CHAT_URLS:
+        try:
+            r = http_post(url, headers={"Authorization": f"Bearer {token}",
+                                        "Content-Type": "application/json",
+                                        "Accept": "application/json"},
+                          json={"model": GIGACHAT_MODEL, "temperature": 0.3, "max_tokens": 400,
+                                "messages": [{"role": "system", "content": GIGA_SYSTEM},
+                                             {"role": "user", "content": prompt}]})
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            last = e
+    raise last
+
+
+def parse_giga(answer):
+    out = {}
+    for line in answer.splitlines():
+        line = line.strip().lstrip("-•* ").strip()
+        for key, label in (("name", "тема:"), ("about", "суть:"), ("value", "для нас:")):
+            if line.lower().startswith(label):
+                out[key] = line[len(label):].strip().strip("*").strip()
+    return out
+
+
+def describe_topics(dg):
+    """Просит нейросеть пересказать каждую тему. При любой ошибке — молча
+    возвращает False, и сводка соберётся по словам."""
+    key = os.environ.get("GIGACHAT_KEY", "").strip()
+    if not key or not dg or not dg["topics"]:
+        return False
+    try:
+        token = gigachat_token(key)
+    except Exception as e:
+        print(f"GigaChat: не получил доступ — {e}")
+        return False
+    done = False
+    for t in dg["topics"]:
+        titles = "\n".join(f"- {d['title']} ({d['src']})" for d in t["all"])
+        ours = f". У нас уже был материал: «{t['ours']}»" if t["ours"] else ""
+        try:
+            got = parse_giga(gigachat_ask(token, GIGA_TASK.format(titles=titles, ours=ours)))
+        except Exception as e:
+            print(f"GigaChat: ошибка при пересказе темы — {e}")
+            continue
+        if got.get("about"):
+            t.update(got)
+            done = True
+    return done
+
+
+def lower_first(text):
+    """«Нападения медведей» → «нападения медведей», но «Wildlife Photographer» и «ВОЗ» не трогаем."""
+    first = text.split()[0] if text.split() else ""
+    if not first or not re.match(r"[А-ЯЁ][а-яё]", first):
+        return text
+    return text[0].lower() + text[1:]
+
+
+def format_digest_ai(dg, day):
+    first = dg["topics"][0]
+    head = (f"📊 Сводка за сутки, {day.day} {MONTHS[day.month - 1]}\n\n"
+            f"Всего {plural(dg['total'], 'новость', 'новости', 'новостей')} по нашим темам "
+            f"в {plural(dg['sources'], 'издании', 'изданиях', 'изданиях')}. "
+            f"Самая частая тема — {lower_first(first.get('name') or first['shown'][0]['title'])} "
+            f"(написали {plural(first['sources'], 'издание', 'издания', 'изданий')}).")
+    lines = [head]
+    for num, t in enumerate(dg["topics"], 1):
+        name = t.get("name") or t["shown"][0]["title"]
+        block = [f"\n{num}. {name} · {heat(t['sources'])} "
+                 f"{plural(t['sources'], 'издание', 'издания', 'изданий')}"]
+        if t.get("about"):
+            block.append(t["about"])
+        if t.get("value"):
+            block.append(f"Для нас: {t['value']}")
+        if t["ours"]:
+            block.append(f"У нас было: «{t['ours']}»")
+        block.append("Читать: " + " · ".join(d["link"] for d in t["shown"]))
+        lines.append("\n".join(block))
+    return "\n".join(lines)
+
+
+def digest_text(state):
+    published = read_lines(PUBLISHED_FILE)
+    dg = build_digest(state["history"], time.time(), published)
+    day = moscow_now()
+    if describe_topics(dg):
+        return format_digest_ai(dg, day)
+    return format_digest(dg, day)
+
+
 # ---------- Отправка в Telegram ----------
 
 def tg_send(token, chat_id, text):
@@ -547,6 +846,8 @@ https://vk.com/группа
 /минус слово — добавить исключение (например: /минус гороскоп)
 /убрать слово — удалить слово или исключение из фильтра
 /слова — показать слова фильтра
+
+/сводка — сводка за последние сутки (в канал она приходит сама каждый день после 10:00)
 
 Я проверяю сообщения раз в 15 минут, поэтому отвечаю не сразу."""
 
@@ -759,6 +1060,7 @@ COMMANDS = {
     "/минус": "minus", "/minus": "minus",
     "/убрать": "unword", "/unword": "unword",
     "/слова": "words", "/words": "words",
+    "/сводка": "digest", "/digest": "digest",
 }
 
 
@@ -786,6 +1088,8 @@ def handle_message(msg):
         return cmd_remove_word(rest)
     if action == "words":
         return cmd_list_words()
+    if action == "digest":
+        return digest_text(load_state())
     if text.startswith("/"):
         return "Не знаю такую команду. Список команд: /помощь"
     return cmd_add(text.splitlines())
@@ -899,6 +1203,7 @@ def main():
                     continue
             elif not contest and not passes(match_text(it, mode), include, exclude, take_all):
                 continue
+            state["history"].append([now, it["title"], it["link"], source_id(target)])
             sig = title_signature(it["title"])
             if MERGE_SIMILAR and any(is_similar(sig, t[1]) for t in state["titles"]):
                 merged += 1
@@ -928,6 +1233,17 @@ def main():
         state["pending"] = []
     if due:
         state["last_post"] = now
+
+    msk = moscow_now()
+    today = msk.strftime("%Y-%m-%d")
+    if not state["last_digest"]:
+        state["last_digest"] = today  # первая сводка — завтра, когда накопятся сутки новостей
+    elif msk.hour >= DIGEST_HOUR and state["last_digest"] != today:
+        if token and chat_id:
+            for part in split_text(digest_text(state)):
+                tg_send(token, chat_id, part)
+            print("Отправлена сводка за сутки")
+        state["last_digest"] = today
 
     save_state(state)
 
