@@ -60,6 +60,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           VK_TOKEN: ${{ secrets.VK_TOKEN }}
+          GIGACHAT_KEY: ${{ secrets.GIGACHAT_KEY }}
 
       - name: Сохранить память бота
         if: ${{ !inputs.check && always() && hashFiles('state/seen.json') != '' }}
