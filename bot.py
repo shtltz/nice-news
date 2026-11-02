@@ -287,6 +287,52 @@ def short_title(text, limit=160):
     return first if len(first) <= limit else first[:limit - 3].rstrip() + "…"
 
 
+def _ts(y, m, d):
+    try:
+        if not (2000 <= y <= 2100):
+            return None
+        return timegm(datetime(y, m, d).timetuple())
+    except ValueError:
+        return None
+
+
+def url_date(link):
+    """Дата публикации, зашитая в ссылку, если она там есть.
+    Многие ленты ставят свежую дату к старым переизданным материалам,
+    а в ссылке остаётся настоящая: m24.ru/news/31082026/…, rbc.ru/…/17/06/2026/…"""
+    path = urlsplit(link).path
+    pats = [
+        (r"/(20\d\d)/(\d\d)/(\d\d)(?:/|$|[-_.])", lambda g: (g[0], g[1], g[2])),      # /2026/08/31/
+        (r"/(20\d\d)-(\d\d)-(\d\d)(?:/|$)", lambda g: (g[0], g[1], g[2])),             # /2026-08-31/
+        (r"/(\d\d)/(\d\d)/(20\d\d)(?:/|$)", lambda g: (g[2], g[1], g[0])),             # /31/08/2026/
+        (r"/(20\d\d)(\d\d)(\d\d)(?:/|$)", lambda g: (g[0], g[1], g[2])),               # /20260831/
+        (r"/(\d\d)(\d\d)(20\d\d)(?:/|$)", lambda g: (g[2], g[1], g[0])),               # /31082026/
+    ]
+    for pat, order in pats:
+        m = re.search(pat, path)
+        if m:
+            y, mo, d = (int(x) for x in order(m.groups()))
+            ts = _ts(y, mo, d)
+            if ts:
+                return ts
+    # Идентификатор вида 6a966e46884e1199ae9cdabf (РБК) хранит время создания
+    m = re.search(r"/([0-9a-f]{24})(?:/|$|\?)", path + "/")
+    if m:
+        ts = int(m.group(1)[:8], 16)
+        if 1262304000 < ts < time.time() + 2 * 86400:   # 2010 год … послезавтра
+            return ts
+    # Только год и месяц: /2026/08/ или /2026/may/ — считаем концом месяца
+    months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    m = re.search(r"/(20\d\d)/(\d\d|[a-z]{3,9})(?:/|$)", path.lower())
+    if m:
+        y, raw = int(m.group(1)), m.group(2)
+        mo = int(raw) if raw.isdigit() else (months.index(raw[:3]) + 1 if raw[:3] in months else 0)
+        if 1 <= mo <= 12:
+            nxt = _ts(y + (mo == 12), mo % 12 + 1, 1)
+            return nxt - 1 if nxt else None
+    return None
+
+
 def entry_time(entry):
     for field in ("published_parsed", "updated_parsed"):
         value = entry.get(field)
@@ -1195,6 +1241,10 @@ def main():
             if it["time"] is None and is_new_source:
                 continue  # у новых источников без дат всё уже лежащее считаем старым
             if it["time"] is not None and now - it["time"] > max_age:
+                continue
+            u = url_date(it["link"])
+            # В ссылке только день, без часа: даём сутки запаса на часовые пояса
+            if u is not None and now - u > max_age + 24 * 3600:
                 continue
             contest = is_contest(it["text"], contests, exclude)
             take_all = rule == "all" and not str(mode).startswith(SITE_FEED)
