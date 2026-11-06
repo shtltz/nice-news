@@ -112,3 +112,4 @@ https://t.me/rasofficial
 
 # --- Добавлено через бота ---
 @weather_from_chief
+http://nature.kremlin.ru/news
